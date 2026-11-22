@@ -6,6 +6,7 @@
 const CACHE = 'planner28-v1';
 const SHELL = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './apple-touch-icon.png'];
 const HOME = new URL('./', self.location.href);          // …/planner28/
+const OWN = SHELL.slice(2).map(u => u.slice(2)).concat(['icon-512-maskable.png']);   // the manifest and the icon files: the only things besides the page this worker answers for
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE)
@@ -49,6 +50,7 @@ self.addEventListener('fetch', e => {
   if (!url.pathname.startsWith(HOME.pathname)) return;                // another planner on the same site: never touched
   if (url.searchParams.has('p28check')) return;                       // the page asking "is there a newer version": straight to the server
   const rest = url.pathname.slice(HOME.pathname.length);
-  if (req.mode === 'navigate' || rest === '' || rest === 'index.html') { e.respondWith(page(req, url)); return; }
+  if (rest === '' || rest === 'index.html') { e.respondWith(page(req, url)); return; }   // the planner's own page, and only that: any other page under this address is not ours to keep or to answer
+  if (!OWN.includes(rest)) return;                                    // another page, a sub-folder, any other file: never touched, never kept
   e.respondWith(caches.open(CACHE).then(c => c.match(req).then(hit => hit || fetch(req).then(res => { if (res && res.ok) c.put(req, res.clone()); return res; }))));
 });
