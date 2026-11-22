@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<meta name="p28-build" content="01895c2f" />
+<meta name="p28-build" content="a1f58662" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 <meta name="theme-color" content="#efe8da" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -246,6 +246,12 @@ body[data-lay="lap"].v-week .wrap{padding:0 24px 32px}
 .bcol.pool{flex:0 0 240px}
 body[data-w="wide"] .bcol.pool{flex-basis:280px} body[data-w="wide"] .bcol.wkd{flex:0 0 230px} body[data-w="wide"] .bcol.nxt{flex:0 0 250px}
 body[data-w="tablet"] .bcol.pool{flex-basis:260px}
+/* p12: the Weekend arrangement (laptop and wide): open columns share the width (Either day a double share while it holds the most); a folded one is the 44px strip at every width; while a task is dragged, the folded strip of days gone by takes no part */
+body[data-lay="lap"] .board > .bcol.wke:not(.tab){flex:1 1 0}
+body[data-lay="lap"] .board > .bcol.wke.wke2:not(.tab){flex:2 1 0}
+body[data-lay="lap"] .board > .bcol.wke.tab{flex:0 0 44px}
+body[data-lay="lap"] .board > .bcol.wke.tab.dropt{flex-basis:200px}
+body[data-lay="lap"] .board:has(> .bcol.wke):has(.t.dragging) > .bcol.past.tab{pointer-events:none}
 .bcol.today{background:var(--col-today);border-color:var(--p);box-shadow:inset 0 0 0 1px var(--p)}
 .bhead{display:flex;align-items:center;gap:6px;padding:8px 6px 6px 12px;min-height:40px;flex:0 0 auto}
 .bhead .dw{font-size:14px;font-weight:740;white-space:nowrap}
@@ -4143,7 +4149,66 @@ function renderToday27(){
 /* ---------- WEEK+ : one board. Every bucket is always in the page; which ones are open is the only difference
    between the short view (Unscheduled, today, the next day, Weekend) and Whole week. ---------- */
 function openCount(w, di){ return colArr(w,di,'personal').filter(t=>!t.done).length+colArr(w,di,'work').filter(t=>!t.done).length; }
+/* ---------- p12: the Weekend arrangement of Week+ (laptop and wide windows only) ----------
+   Either day, Sat and Sun are each a full-height column of their own, side by side, sharing the width with Unscheduled.
+   Mon to Fri are the folded strips Week+ already has. It is the default on Saturday and Sunday for this week; the Weekend
+   button turns it on and off on any day and for any week. Display only: it reads the planner, and the one thing it keeps
+   is this device's own choices for today, p28:ui:wkend = "DATE;WEEK:on;WEEK:off": a press counts for the week it was made
+   on, for that day only. It never writes the planner and sends no save. Phone and tablet never come here (wkendOn is
+   false for them). While Either day holds more unfinished tasks than Sat and Sun together it takes a double share. */
+ui.wkend=lsGet('p28:ui:wkend','');
+function wkendAuto(){ return ui.weekKey===todayMonday && todayDayIdx()>=5; }       // Saturday or Sunday, looking at this week
+function wkendChoices(){ const p=String(ui.wkend||'').slice(0,1200).split(';'), m={}; if(p[0]!==todayISO) return m;      // another day's choices count for nothing
+  for(let i=1;i<p.length && i<=60;i++){ const x=/^(\d{4}-\d{2}-\d{2}):(on|off)$/.exec(p[i]); if(x) m[x[1]]=x[2]; } return m; }
+function wkendOn(){ const vp=vpName(); if(vp!=='wide' && vp!=='laptop') return false;
+  const c=wkendChoices()[ui.weekKey]; return c ? c==='on' : wkendAuto(); }
+function wkendSet(on){ const m=wkendChoices(); delete m[ui.weekKey]; m[ui.weekKey]=on?'on':'off';                         // for the week on screen only
+  ui.wkend=todayISO+Object.keys(m).slice(-60).map(k=>';'+k+':'+m[k]).join(''); lsSet('p28:ui:wkend', ui.wkend); }
+function wkendLeave(){ if(!wkendOn()) return false; wkendSet(false); return true; }    // Whole week pressed while Weekend is showing
+function wkendBtn(vp){ return ((vp==='wide'||vp==='laptop') && ui.view==='weekplus') ? `<button class="hb" data-act="wkendview" aria-pressed="${wkendOn()}">Weekend</button>` : ''; }
+/* how the open columns share the width. n = open columns without Next week, total = all columns, want2 = Either day asks for a
+   double share, hand = he opened Next week himself. Strips are 44 px, gaps 8 px. Next week opens by itself only where the narrowest
+   open column would still be 300 px; Either day gets its double share only where every other open column still gets 230 px. */
+function wkendPlan(n, total, want2, hand){ const w=(view && view.clientWidth) || (frameW()-48);
+  const unit=(open, shares)=>(w-44*(total-open)-8*(total-1)-2*open)/shares+2;                 // the real width of a one-share column (each column's 2 px of border is not shared out)
+  if(want2 && unit(n+1, n+1)>=300 && unit(n+1, n+2)<300) want2=false;                         // R1: where Next week is a column with equal shares but would fold with the double share, keep equal shares
+  const fit=unit(n+1, n+1+(want2?1:0))>=300, nxt=fit||hand, open=n+(nxt?1:0);
+  return {fit, nxt, two:want2 && unit(open, open+1)>=230}; }
+function wkendCols(){
+  const wk=weekView(ui.weekKey), nxKey=addDays(ui.weekKey,7), nwk=weekView(nxKey);
+  const isThis=ui.weekKey===todayMonday, td=todayDayIdx();
+  const dsec=i=>({w:wk, di:i, iso:addDays(ui.weekKey,i), today:isThis&&i===td});
+  const dcol=i=>({id:'d'+i, cls:(isThis&&i===td)?'today':'', dw:DOW[i], nn:String(wk.days[i].n), secs:[dsec(i)], today:isThis&&i===td, count:(!isThis||i>=td)?openCount(wk,i):0, chip:i<5?i:undefined});
+  const cols=[{id:'pool', cls:'pool wke', dw:'Unscheduled', nn:isThis?'':'w/c '+dmon(ui.weekKey), secs:[{w:wk,di:'F'}], chip:'F', pool:true}];
+  /* Mon to Fri: the same strips the short view has (days gone by under one strip, the rest one each), all folded */
+  if(isThis && td>0){
+    const last=Math.min(td-1,4); cols.push({id:'past', cls:'past', dw:last===0?'Mon':('Mon–'+DOW[last]), nn:'', secs:Array.from({length:last+1},(_,i)=>Object.assign(dsec(i),{title:DOW[i]+' '+wk.days[i].n})), count:0});
+    for(let i=td;i<=4;i++) cols.push(dcol(i));
+  } else for(let i=0;i<=4;i++) cols.push(dcol(i));
+  cols.push({id:'wkd', cls:'wkd wke', dw:'Either day', nn:'', secs:[{w:wk,di:'W'}], count:openCount(wk,'W'), chip:'W'});
+  cols.push(dcol(5)); cols.push(dcol(6));
+  cols.push({id:'nxt', cls:'nxt wke', dw:'Next week', nn:'Unscheduled · w/c '+dmon(nxKey), secs:[{w:nwk,di:'F'}], count:openCount(nwk,'F'), chip:'N'});
+  /* which columns are open: Unscheduled, Sat, Sun; Either day unless it holds no tasks at all; any strip he opened himself;
+     Next week where every open column would still be at least 300 px wide (wkendPlan) */
+  const open=new Set(['pool','d5','d6']);
+  if(colArr(wk,'W','personal').length+colArr(wk,'W','work').length>0) open.add('wkd');
+  const ids=new Set(cols.map(c=>c.id));
+  ui.openTabs.forEach(id=>{ if(!ids.has(id) || id==='nxt') return; if(open.has(id)) ui.openTabs.delete(id); else open.add(id); });
+  const want2=open.has('wkd') && openCount(wk,'W')>openCount(wk,5)+openCount(wk,6);        // more unfinished in Either day than on Sat and Sun together
+  const P=wkendPlan(open.size, cols.length, want2, ui.openTabs.has('nxt'));
+  wkendCols.last={n:open.size, total:cols.length, want2, sig:''+P.nxt+P.two};                // kept for wkendResized only: what the board last drawn decided
+  if(P.fit) ui.openTabs.delete('nxt'); if(P.nxt) open.add('nxt');
+  cols.forEach(c=>{ c.open=open.has(c.id); if(c.id==='wkd' && P.two) c.cls+=' wke2'; });
+  return {cols, wk, nwk, nxKey, isThis, plan:false};
+}
+/* the window made wider or narrower while the Weekend arrangement is showing: redraw only if Next week should now open or fold,
+   or Either day's double share should come or go */
+function wkendResized(){ const L=wkendCols.last; if(ui.view!=='weekplus' || !isLap() || !wkendOn() || !L || dragging || (dlg && dlg.open)) return;
+  const P=wkendPlan(L.n, L.total, L.want2, ui.openTabs.has('nxt')); if(''+P.nxt+P.two!==L.sig) renderWeekPlus(); }
+{ let t=null; window.addEventListener('resize', ()=>{ clearTimeout(t); t=setTimeout(wkendResized,160); }); }
+
 function boardCols(){
+  if(wkendOn()) return wkendCols();   /* p12 */
   const wk=weekView(ui.weekKey), nxKey=addDays(ui.weekKey,7), nwk=weekView(nxKey);
   const isThis=ui.weekKey===todayMonday, td=todayDayIdx(), vp=vpName(), plan=(wpMode()==='plan')||!isThis||vp==='phone';
   const dsec=i=>({w:wk, di:i, iso:addDays(ui.weekKey,i), today:isThis&&i===td});
@@ -4199,7 +4264,7 @@ function weekTools(){
   const range=sm===em?`${sd} – ${ed} ${MON[em-1]}`:`${sd} ${MON[sm-1]} – ${ed} ${MON[em-1]}`;
   const isThis=ui.weekKey===todayMonday, lap=isLap(), vp=vpName();
   const carry=unfinishedPastDays().length?`<button class="hb gold" data-act="carryover">Carry over →</button>`:'';
-  const whole=(vp==='wide'||vp==='laptop')&&ui.view==='weekplus'&&isThis?`<button class="hb" data-act="wholeweek" aria-pressed="${wpMode()==='plan'}">Whole week</button>`:'';
+  const whole=((vp==='wide'||vp==='laptop')&&ui.view==='weekplus'&&isThis?`<button class="hb" data-act="wholeweek" aria-pressed="${wpMode()==='plan'&&!wkendOn()}">Whole week</button>`:'')+wkendBtn(vp);   /* p12 */
   const nav=`<button class="hb icon" data-act="prevweek" aria-label="Previous week">${IC.l}</button><button class="hb icon" data-act="nextweek" aria-label="Next week">${IC.r}</button>${isThis?'':`<button class="hb" data-act="thisweek">This week</button>`}`;
   const menu=`<button class="hb icon" data-act="weekmenu" aria-label="More for this week" title="More">${IC.dots}</button>`;
   const sel=ui.selMode?`<button class="hb primary" data-act="selmode">Stop selecting</button>`:'';
@@ -4477,7 +4542,8 @@ document.addEventListener('click', e=>{
   const a=e.target.closest('[data-act]'); if(!a) return; const act=a.dataset.act;
   if(ui.selMode) selTouch();
   if(act==='weekmenu'){ openWeekMenu(); return; }
-  if(act==='wholeweek'){ ui.wpmode=(wpMode()==='plan')?'focus':'plan'; lsSet('p28:ui:wpmode',ui.wpmode); ui.openTabs.clear(); render(); return; }
+  if(act==='wkendview'){ wkendSet(!wkendOn()); ui.openTabs.clear(); render(); return; }   /* p12 */
+  if(act==='wholeweek'){ ui.wpmode=wkendLeave()?'plan':(wpMode()==='plan')?'focus':'plan'; lsSet('p28:ui:wpmode',ui.wpmode); ui.openTabs.clear(); render(); return; }   /* p12: wkendLeave */
   if(act==='thisweek'){ ui.weekKey=todayMonday; ui.openTabs.clear(); viewTransition(render); return; }
   if(act==='carryover'){ openCarryOver(); return; }
   if(act==='opentab'){ const col=a.closest('[data-col]'); if(!col) return; const id=col.dataset.col; if(vpName()==='tablet'){ ui.openTabs=new Set([id]); } else if(ui.openTabs.has(id)) ui.openTabs.delete(id); else ui.openTabs.add(id); renderWeekPlus(); return; }
@@ -6767,7 +6833,7 @@ async function bringDeviceChoices(){ const came=[];
    Each build carries its own mark (the <meta name="p28-build"> near the top of the page). On opening, and when the page comes
    back into view (at most every five minutes), the first few thousand bytes of the page on the server are read and the mark
    compared. Nothing is fetched on a timer and nothing here ever touches a stored task. */
-const P28_BUILD='01895c2f';
+const P28_BUILD='a1f58662';
 let _newBuild=null, _updAt=0, _updBusy=false, _updNote='', _updAnyway=false, _lastKeyAt=0, _updT=null;
 ['keydown','input','compositionstart'].forEach(ev=>document.addEventListener(ev, ()=>{ _lastKeyAt=Date.now(); }, true));
 function buildMarkIn(text){ const m=String(text||'').slice(0,8000).match(/<meta name="p28-build" content="([^"]+)"/); return m?m[1]:null; }
