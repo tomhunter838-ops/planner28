@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<meta name="p28-build" content="a1f58662" />
+<meta name="p28-build" content="d3ac1a3a" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 <meta name="theme-color" content="#efe8da" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -3154,7 +3154,10 @@ const ghState={ refreshing:false, needsTap:false, permission:null, stripErr:null
 let _ghLast=0, _ghDismiss=0, _gisLoading=null, _healthRenderDeferred=false;
 /* The installed iOS PWA cannot complete a GIS popup (no scriptable popup channel, isolated
    cookie jar) — there the phone is a SYNC CONSUMER: gh data arrives via OneDrive merge. */
-function isStandalonePWA(){ try{ return navigator.standalone===true || (window.matchMedia&&matchMedia('(display-mode: standalone)').matches); }catch(e){ return false; } }
+/* 25 Nov 2026 fix: the iPhone/iPad home-screen app ONLY (navigator.standalone). The old test also took
+   display-mode: standalone, which a Chrome app window on the laptop reports as well, so the laptop was made a
+   consumer too: card "through OneDrive", no Resume, refreshGH() skipped, and no device left fetching. */
+function isStandalonePWA(){ try{ return navigator.standalone===true; }catch(e){ return false; } }
 function ghRawTok(){ try{ return JSON.parse(localStorage.getItem(GH.tokKey)||'null'); }catch(e){ return null; } }
 function ghHasGrant(){ const t=ghRawTok(); return !!(t&&t.access); }
 function ghToken(){ const t=ghRawTok(); if(!t||!t.access) return null; if(Date.now()>(+t.exp||0)-60000) return null; return t; }
@@ -3223,9 +3226,9 @@ async function ghConnect(mode, isResume){
   ghState.connErr=null;
   try{
     const t=await ghAcquireToken(mode==='consent'?'consent':'connect');
-    if(!ghStoreToken(t)){ if(ui.view==='more')renderMore(); return; }
+    if(!ghStoreToken(t)){ if(ui.view==='more')renderMore(); else ghPausedSync(); return; }
     flashToast(isResume?'Google Health resumed ✓':'Google Health connected ✓ — running beside Fitbit until September');
-    if(ui.view==='more')renderMore();
+    if(ui.view==='more')renderMore(); else ghPausedSync(true);
     refreshGH(true);
   }catch(e){
     if(ghToken()) return;   /* panel (iPhone QA): a later attempt already won — a stale watchdog must not latch an error onto a live connection */
@@ -3240,7 +3243,7 @@ async function ghConnect(mode, isResume){
     else if(/popup-timeout/.test(type)) ghState.connErr='Google sign-in didn’t complete — tap to try again';
     else if(/nav-pending/.test(type)) ghState.connErr='Another sign-in is in progress — try again in a moment';
     else ghState.connErr='Google sign-in failed ('+type.slice(0,60)+') — tap to try again';
-    if(ui.view==='more')renderMore();
+    if(ui.view==='more')renderMore(); else ghPausedSync();
   }
 }
 function ghDisconnect(){
@@ -3539,13 +3542,28 @@ function renderDeferred(){
   render();
 }
 function ghPrimaryErr(){ return ghState.permission || ghState.stripErr || ghState.dailiesErr || (ghState.needsTap?'Paused — tap Resume on the card':null); }
+/* 25 Nov 2026 fix: v2.4's ribbon said "paused — tap to resume". The 2.7 rebuild moved the figures to Review and
+   dropped that line (ghStale6h was left unused), so a lapsed Google hour was silent everywhere but the Connections
+   card. Same condition and same action as v2.4, shown where the figures are now read. */
+function ghPausedHTML(){
+  if(isStandalonePWA() || !(ghHasGrant() || ghState.needsTap) || !ghStale6h()) return '';   /* needsTap: Google turned the sign-in away mid-hour and it was dropped */
+  if(ghState.permission) return `<div class="conn-warn" id="ghpaused">${esc(ghState.permission)} <button class="linkbtn" data-gh="consent">Fix permissions</button></div>`;
+  if(!ghToken()) return `<div class="conn-warn" id="ghpaused">Google Health is paused, so these figures have stopped updating. One tap resumes it; no password. <button class="linkbtn" data-gh="resume">Resume</button>${ghState.connErr?'<br>'+esc(ghState.connErr):''}</div>`;
+  const err=ghState.stripErr||ghState.dailiesErr;   /* signed in, but the last read of Google Health failed: say why, here, where the figures are */
+  return err?`<div class="conn-warn" id="ghpaused">${esc(err)} <button class="linkbtn" data-gh="refresh">Try again</button></div>`:'';
+}
+/* After a sign-in attempt made away from the Connections card, only this one line is brought up to date (or taken
+   away). Nothing else on screen is redrawn, so nothing being typed anywhere is disturbed. */
+function ghPausedSync(clear){ try{ const el=document.getElementById('ghpaused'); if(!el) return; const h=clear?'':ghPausedHTML(); if(h) el.outerHTML=h; else el.remove(); }catch(e){} }
+/* "updated 19:36" read as today's even when it was days old: the date is shown whenever it is not today */
+function ghWhen(ts){ const iso=localISO(ts); return (iso===todayISO?'':dmon(iso)+' ')+hhmm(ts); }
 /* ---- ribbon warn precedence: at most ONE line. needsTap (fixable in place, only when gh
    is stale >6h) → permission/drift (needs reading) → Fitbit error → GH transient stays card-only. ---- */
 /* ---- More → Connections card ---- */
 function ghCardInner(){
   if(isStandalonePWA()){
     const held=ghDataPresent()?Object.keys(DB.health.gh.days).length:0;
-    const upd=(DB.health&&DB.health.gh&&DB.health.gh.updatedAt)?(' · updated '+hhmm(DB.health.gh.updatedAt)):'';
+    const upd=(DB.health&&DB.health.gh&&DB.health.gh.updatedAt)?(' · updated '+ghWhen(DB.health.gh.updatedAt)):'';
     return `<div class="conn">
       <div class="conn-h"><div><div class="conn-t">Google Health</div><div class="conn-d">${held?held+' day'+(held!==1?'s':'')+' through OneDrive'+upd:'Connects on the laptop — this phone shows the figures automatically'}</div></div><span class="conn-badge">through OneDrive</span></div>
       ${held?'<button class="conn-mini" data-gh="openhealth">Open health view →</button>':''}
@@ -3564,12 +3582,12 @@ function ghCardInner(){
   }
   const held=ghDataPresent()?Object.keys(DB.health.gh.days).length:0;
   const g=DB.health&&DB.health.gh;
-  const upd=(g&&g.updatedAt)?(' · updated '+hhmm(g.updatedAt)):'';
+  const upd=(g&&g.updatedAt)?(' · updated '+ghWhen(g.updatedAt)):'';
   const paused=!ghToken();   /* computed before the template below uses it */
   const warn = ghState.permission
     ? `<div class="conn-warn">${esc(ghState.permission)} <button class="linkbtn" data-gh="consent">Fix permissions</button></div>`
     : paused
-      ? `<div class="conn-warn">Paused — Google pauses browser access after an hour away. One tap resumes it; no password. <button class="linkbtn" data-gh="resume">Resume</button></div>`
+      ? `<div class="conn-warn">Paused — Google pauses browser access after an hour away. One tap resumes it; no password. <button class="linkbtn" data-gh="resume">Resume</button>${ghState.connErr?'<br>'+esc(ghState.connErr):''}</div>`
       : (ghState.connErr?`<div class="conn-warn">${esc(ghState.connErr)} <button class="linkbtn" data-gh="resume">Try again</button></div>`:'');
   const errs=[ghState.stripErr,ghState.dailiesErr].filter(s=>s&&s!==ghState.permission).map(s=>`<div class="conn-warn">${esc(s)}</div>`).join('');
   const zero=(!paused&&!ghState.permission&&!ghState.stripErr&&held===0&&g&&g.updatedAt)
@@ -4732,7 +4750,7 @@ function healthSection(){
   let rows=''; for(let i=0;i<14;i++){ const iso=addDays(todayISO,-i); const r=healthRec(iso)||{}; const c=v=>v==null?'–':String(Math.round(v)); rows+=`<span>${dmon(iso)}</span><span>${r.sleepMins==null?'–':hm(r.sleepMins)}</span><span>${r.steps==null?'–':Number(r.steps).toLocaleString('en-GB')}</span><span>${c(r.rhr)}</span><span>${c(r.hrvMs)}</span>`; }
   const rd=ui.healthRead;
   return `<div class="tiles">${tile('Sleep', sl?hm(sl.v):null, dl(sl))}${tile('Resting heart rate', rh?Math.round(rh.v):null, dl(rh))}${tile('HRV', hv?Math.round(hv.v)+' ms':null, dl(hv))}${tile('Steps', st?Number(st.v).toLocaleString('en-GB'):null, dl(st))}</div>
-    <div class="note" style="margin-top:8px" id="healthupto">Health data up to ${dmon(up)}</div>${gym}
+    <div class="note" style="margin-top:8px" id="healthupto">Health data up to ${dmon(up)}</div>${ghPausedHTML()}${gym}
     <details class="fold"><summary>Details</summary><div class="htab"><span class="hh">Day</span><span class="hh">Sleep</span><span class="hh">Steps</span><span class="hh">Resting HR</span><span class="hh">HRV</span>${rows}</div>${ghDataPresent()?`<button class="linkbtn" data-go="health">More health detail</button>`:''}</details>
     ${claudeBackend()?`<div style="margin-top:8px"><button class="hb claude" data-act="readhealth" ${rd&&rd.state==='loading'?'disabled':''}>${rd&&rd.state==='loading'?'Reading…':'Read my health'}</button></div>`:''}
     ${rd&&rd.state==='done'?`<div class="claudecard" style="margin-top:8px"><p>${mdLite(rd.text).replace(/\n+/g,'</p><p style="margin-top:8px">')}</p><div class="cc-foot">Trends only, from the numbers above. Not medical advice; speak to your GP about anything that worries you.</div></div>`:''}`;
@@ -6833,7 +6851,7 @@ async function bringDeviceChoices(){ const came=[];
    Each build carries its own mark (the <meta name="p28-build"> near the top of the page). On opening, and when the page comes
    back into view (at most every five minutes), the first few thousand bytes of the page on the server are read and the mark
    compared. Nothing is fetched on a timer and nothing here ever touches a stored task. */
-const P28_BUILD='a1f58662';
+const P28_BUILD='d3ac1a3a';
 let _newBuild=null, _updAt=0, _updBusy=false, _updNote='', _updAnyway=false, _lastKeyAt=0, _updT=null;
 ['keydown','input','compositionstart'].forEach(ev=>document.addEventListener(ev, ()=>{ _lastKeyAt=Date.now(); }, true));
 function buildMarkIn(text){ const m=String(text||'').slice(0,8000).match(/<meta name="p28-build" content="([^"]+)"/); return m?m[1]:null; }
